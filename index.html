@@ -4,6 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Speiseplan – Diese Woche</title>
+<link rel="icon" href="/favicon.png" type="image/png" />
+<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <style>
   :root {
     --bg: #f6f3ee;
@@ -39,12 +41,32 @@
     font-size: 0.95rem;
     margin: 0;
   }
-  .week-range {
+  .week-nav {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
     margin-top: 10px;
+  }
+  .week-range {
     font-size: 0.85rem;
     color: var(--accent);
     font-weight: 600;
+    min-width: 160px;
   }
+  .nav-btn {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--ink);
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    font-family: inherit;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .nav-btn:hover { border-color: var(--accent); }
   #refreshBtn {
     margin-top: 12px;
     background: var(--card);
@@ -112,16 +134,6 @@
     line-height: 1.4;
   }
   .menu-item:first-child { border-top: none; }
-  .menu-label {
-    display: inline-block;
-    font-size: 0.72rem;
-    color: #fff;
-    background: var(--accent);
-    padding: 1px 7px;
-    border-radius: 999px;
-    margin-right: 6px;
-    vertical-align: middle;
-  }
   .empty-note {
     color: var(--muted);
     font-size: 0.9rem;
@@ -148,7 +160,11 @@
 <header>
   <h1>🍽️ Speiseplan</h1>
   <p class="subtitle">BRG Wien III, Boerhaavegasse 15</p>
-  <div class="week-range" id="weekRange"></div>
+  <div class="week-nav">
+    <button class="nav-btn" id="prevWeek" aria-label="Vorherige Woche">←</button>
+    <span class="week-range" id="weekRange"></span>
+    <button class="nav-btn" id="nextWeek" aria-label="Nächste Woche">→</button>
+  </div>
   <button id="refreshBtn">Aktualisieren</button>
 </header>
 
@@ -189,7 +205,7 @@ function isSameDay(a, b) {
 function renderMeal(title, items) {
   if (!items || items.length === 0) return "";
   const rows = items.map(it =>
-    `<div class="menu-item"><span class="menu-label">${escapeHtml(it.label)}</span>${escapeHtml(it.dish)}</div>`
+    `<div class="menu-item">${escapeHtml(it.dish)}</div>`
   ).join("");
   return `<div class="meal-block"><div class="meal-title">${title}</div>${rows}</div>`;
 }
@@ -217,53 +233,75 @@ function renderDay(day, todayDate) {
   `;
 }
 
-async function loadMenu() {
-  const app = document.getElementById("app");
-  const weekRangeEl = document.getElementById("weekRange");
-  app.innerHTML = '<p class="status">Lade Speiseplan …</p>';
+let cachedDays = null;
+let weekOffset = 0;
 
-  try {
-    const res = await fetch("/api/menu", { cache: "no-store" });
-    const data = await res.json();
-
-    if (!res.ok || data.error) {
-      throw new Error(data.error || "Unbekannter Fehler");
-    }
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const monday = getMonday(today);
-    const friday = new Date(monday);
-    friday.setDate(monday.getDate() + 4);
-    friday.setHours(23, 59, 59, 999);
-
-    weekRangeEl.textContent = `Woche vom ${fmt(monday)} bis ${fmt(friday)}`;
-
-    let weekDays = data.days.filter(d => {
-      const dt = new Date(d.iso + "T00:00:00");
-      return dt >= monday && dt <= friday && d.dow !== "Sa" && d.dow !== "So";
-    });
-
-    // Fallback: falls die Schulseite diese Woche noch nicht veröffentlicht hat,
-    // zeige die nächsten verfügbaren Werktage
-    if (weekDays.length === 0 && data.days.length > 0) {
-      weekDays = data.days.filter(d => d.dow !== "Sa" && d.dow !== "So").slice(0, 5);
-      weekRangeEl.textContent += " (noch nicht veröffentlicht – zeige nächste verfügbare Werktage)";
-    }
-
-    if (weekDays.length === 0) {
-      app.innerHTML = '<p class="status">Für diese Woche wurden keine Daten gefunden. Bitte auf der <a href="https://www.boerhaavegasse.at/menuekarte/" target="_blank">Originalseite</a> nachsehen.</p>';
-      return;
-    }
-
-    app.innerHTML = weekDays.map(d => renderDay(d, today)).join("");
-  } catch (err) {
-    app.innerHTML = `<p class="status">Speiseplan konnte nicht geladen werden (${escapeHtml(err.message)}). <br/>Bitte versuche es erneut oder besuche die <a href="https://www.boerhaavegasse.at/menuekarte/" target="_blank">Originalseite</a>.</p>`;
-  }
+function computeWeekRange(offset) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const monday = getMonday(today);
+  monday.setDate(monday.getDate() + offset * 7);
+  const friday = new Date(monday);
+  friday.setDate(monday.getDate() + 4);
+  friday.setHours(23, 59, 59, 999);
+  return { monday, friday, today };
 }
 
-document.getElementById("refreshBtn").addEventListener("click", loadMenu);
-loadMenu();
+function renderWeek() {
+  const app = document.getElementById("app");
+  const weekRangeEl = document.getElementById("weekRange");
+
+  if (!cachedDays) return;
+
+  const { monday, friday, today } = computeWeekRange(weekOffset);
+  weekRangeEl.textContent = `Woche vom ${fmt(monday)} bis ${fmt(friday)}`;
+
+  let weekDays = cachedDays.filter(d => {
+    const dt = new Date(d.iso + "T00:00:00");
+    return dt >= monday && dt <= friday && d.dow !== "Sa" && d.dow !== "So";
+  });
+
+  if (weekDays.length === 0) {
+    app.innerHTML = '<p class="status">Für diese Woche wurden keine Daten gefunden. Bitte auf der <a href="https://www.boerhaavegasse.at/menuekarte/" target="_blank">Originalseite</a> nachsehen.</p>';
+    return;
+  }
+
+  app.innerHTML = weekDays.map(d => renderDay(d, today)).join("");
+}
+
+async function loadMenu(forceRefresh) {
+  const app = document.getElementById("app");
+
+  if (!cachedDays || forceRefresh) {
+    app.innerHTML = '<p class="status">Lade Speiseplan …</p>';
+    try {
+      const res = await fetch("/api/menu", { cache: "no-store" });
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Unbekannter Fehler");
+      }
+      cachedDays = data.days;
+    } catch (err) {
+      app.innerHTML = `<p class="status">Speiseplan konnte nicht geladen werden (${escapeHtml(err.message)}). <br/>Bitte versuche es erneut oder besuche die <a href="https://www.boerhaavegasse.at/menuekarte/" target="_blank">Originalseite</a>.</p>`;
+      return;
+    }
+  }
+
+  renderWeek();
+}
+
+document.getElementById("refreshBtn").addEventListener("click", () => loadMenu(true));
+document.getElementById("prevWeek").addEventListener("click", () => {
+  weekOffset -= 1;
+  renderWeek();
+});
+document.getElementById("nextWeek").addEventListener("click", () => {
+  weekOffset += 1;
+  renderWeek();
+});
+
+loadMenu(false);
 </script>
 
 </body>
