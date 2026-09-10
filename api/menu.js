@@ -145,12 +145,15 @@ function parseMenu(html) {
       }
 
       if (dish) {
+        // Abgleich läuft auf dem UNVERÄNDERTEN Gerichtsnamen - die Beilage
+        // wird separat gehalten, damit sie den Vergleich nicht verfälscht
+        // (sonst verpasst der Duplikat-Check spätere gleiche Gerichte).
         const existing = current[section].find((it) => it.dish === dish);
         if (existing) {
           if (!existing.label.includes(label)) existing.label += " / " + label;
           lastItem = existing;
         } else {
-          const item = { label, dish };
+          const item = { label, dish, side: null };
           current[section].push(item);
           lastItem = item;
         }
@@ -167,7 +170,7 @@ function parseMenu(html) {
         side = lines[i + 1].trim();
         consumedNext = true;
       }
-      if (side) lastItem.dish += " + Beilage: " + side;
+      if (side && !lastItem.side) lastItem.side = side;
       i += consumedNext ? 2 : 1;
       continue;
     }
@@ -176,5 +179,18 @@ function parseMenu(html) {
   }
 
   if (current) days.push(current);
+
+  // Anzeige-Text erst jetzt zusammensetzen (Gericht + ggf. Beilage) -
+  // der Duplikat-Abgleich oben lief bereits vollständig auf dem reinen
+  // Gerichtsnamen.
+  for (const day of days) {
+    for (const section of ["mittag", "abend"]) {
+      day[section] = day[section].map(({ label, dish, side }) => ({
+        label,
+        dish: side ? `${dish} + Beilage: ${side}` : dish,
+      }));
+    }
+  }
+
   return days;
 }
